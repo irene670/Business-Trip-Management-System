@@ -54,6 +54,13 @@ textarea:focus-visible {
 .claim-add-area {
   margin-bottom: 12px;
 }
+.claim-add-area.after-items { margin: 12px 0 0; }
+.advance-toggle { display:flex;align-items:center;gap:9px;border:1px solid var(--line);border-radius:10px;padding:9px 10px;margin-bottom:10px;background:#fff; }
+.advance-toggle input { width:auto;min-height:auto; }
+.advance-toggle span,.advance-toggle small { display:block; }
+.advance-toggle small { color:var(--muted);font-weight:400; }
+.reminder-box { display:grid;gap:10px;border:1px solid var(--amber);border-radius:12px;background:var(--amber-soft);padding:12px;margin-top:12px; }
+.reminder-box p { margin:0;color:var(--muted);font-size:12px; }
 
 .claim-add-trigger {
   min-height: 44px;

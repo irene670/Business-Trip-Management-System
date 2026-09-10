@@ -1,7 +1,7 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import { PDFDocument } from 'pdf-lib'
-import { claimItemsFor, totals, money } from './rules.js'
+import { claimItemsFor, totals, money, itemAmount, taskHours } from './rules.js'
 
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))
 
@@ -12,13 +12,13 @@ export async function generatePdf(c,settings){
   root.className='pdf-render-root'
   root.innerHTML=`<div class="pdf-sheet">
     <div class="pdf-header"><div><b>${esc(c.company)}</b><h1>員工差旅事後費用報支單</h1></div><div>${esc(c.id)}<br>${esc(c.status)}</div></div>
-    <h3>一、申請人與任務</h3><div class="pdf-grid2"><div><small>姓名／部門</small><b>${esc(c.employee)}／${esc(c.dept)}</b></div><div><small>主管</small><b>${esc(c.manager)}</b></div><div><small>差旅／任務</small><b>${esc(c.tripMode)}／${esc(c.taskType)}</b></div><div><small>日期</small><b>${esc(c.startDate)}～${esc(c.endDate)}</b></div><div><small>目的地</small><b>${esc(c.destination)}</b></div><div><small>專案</small><b>${esc(c.projectName||'—')}</b></div><div class="wide"><small>任務說明</small><b>${esc(c.purpose)}</b></div></div>
-    <h3>二、費用明細</h3><table><thead><tr><th>項目</th><th>日期／區間</th><th>內容</th><th>申報</th></tr></thead><tbody>
-      ${claimItems.map(r=>`<tr><td>${esc(r.category)}</td><td>${esc(r.category==='住宿費'?`${r.checkIn||''}～${r.checkOut||''}`:r.date)}</td><td>${esc(r.detail)}${r.note?`<br><small>${esc(r.note)}</small>`:''}</td><td>${money(r.amount)}</td></tr>`).join('')||'<tr><td colspan="4">無員工代墊費用</td></tr>'}
+    <h3>一、申請人與任務</h3><div class="pdf-grid2"><div><small>姓名／員編／部門</small><b>${esc(c.employee)}／${esc(c.employeeId)}／${esc(c.dept)}</b></div><div><small>主管</small><b>${esc(c.manager)}</b></div><div><small>差旅／任務</small><b>${esc(c.tripMode)}／${esc(c.taskType)}</b></div><div><small>日期</small><b>${esc(c.startDate)}～${esc(c.endDate)}</b></div><div><small>任務時間</small><b>${esc(c.taskStartAt)}～${esc(c.taskEndAt)}（${taskHours(c)}h）</b></div><div><small>目的地</small><b>${esc(c.destination)}</b></div><div class="wide"><small>任務說明</small><b>${esc(c.purpose)}</b></div></div>
+    <h3>二、費用明細</h3><table><thead><tr><th>項目</th><th>日期／區間</th><th>內容</th><th>付款方式</th><th>金額</th></tr></thead><tbody>
+      ${claimItems.map(r=>`<tr><td>${esc(r.category)}</td><td>${esc(r.category==='住宿費'?`${r.checkIn||''}～${r.checkOut||''}`:r.date)}</td><td>${esc(r.detail)}${r.km?`<br>${esc(r.km)} 公里`:''}${r.note?`<br><small>${esc(r.note)}</small>`:''}</td><td>${r.personalAdvance!==false?'個人代墊':'公司掛帳'}</td><td>${money(itemAmount(r))}</td></tr>`).join('')||'<tr><td colspan="5">無費用</td></tr>'}
     </tbody></table>
-    <div class="pdf-total">員工申報合計：${money(sum.total)}</div>
-    <h3>三、加班與主管審核</h3><table><thead><tr><th>日期</th><th>起訖</th><th>時數</th><th>工作內容</th></tr></thead><tbody>${(c.overtimeRows||[]).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.start)}～${esc(r.end)}</td><td>${esc(r.hours)}h</td><td>${esc(r.note)}</td></tr>`).join('')||'<tr><td colspan="4">無</td></tr>'}</tbody></table><p>主管決議：${esc(c.managerApproval?.decision||'—')}　${esc(c.managerApproval?.note||'')}</p>
-    <h3>四、會計／行政</h3><p>成本中心：${esc(c.accounting?.costCenter||'—')}　成本類型：${esc(c.accounting?.costType||'—')}</p><p>會計備註：${esc(c.accounting?.note||'—')}</p>
+    <div class="pdf-total">膳雜費：${money(sum.mealAllowance)}　出差津貼：${money(sum.allowance)}　國外日支：${money(sum.foreignPerDiem)}<br>公司掛帳：${money(sum.companyPaid)}　應付員工合計：${money(sum.total)}</div>
+    <h3>三、加班明細</h3><table><thead><tr><th>日期</th><th>起訖</th><th>時數</th><th>工作內容</th></tr></thead><tbody>${(c.overtimeRows||[]).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.start)}～${esc(r.end)}</td><td>${esc(r.hours)}h</td><td>${esc(r.note)}</td></tr>`).join('')||'<tr><td colspan="4">無</td></tr>'}</tbody></table>
+    <h3>四、紙本簽核</h3><table><tbody><tr><td style="height:72px">申請人親簽：<br><br>日期：</td><td>主管親簽：<br><br>日期：</td><td>會計／行政親簽：<br><br>日期：</td></tr></tbody></table>
     <h3>五、票據照片</h3><p>${(c.attachments||[]).filter(a=>a.group==='receipt').length} 張：${(c.attachments||[]).filter(a=>a.group==='receipt').map(a=>esc(a.category)+'｜'+esc(a.name)).join('、')||'無'}</p>
   </div>`
   document.body.appendChild(root)

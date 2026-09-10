@@ -9,10 +9,13 @@ const STORE_FILE = path.join(DATA_DIR, 'store.json')
 
 const initialState = {
   cases: [],
+  accounts: [],
   settings: {
     holidays: [],
     workdays: [],
-    mealBasis: 'tripDays'
+    mealBasis: 'tripDays',
+    employees: [],
+    foreignPerDiems: []
   }
 }
 
@@ -27,7 +30,8 @@ export async function readState() {
   await ensureStore()
   try {
     const raw = await fs.readFile(STORE_FILE, 'utf8')
-    return { ...initialState, ...JSON.parse(raw) }
+    const saved=JSON.parse(raw)
+    return { ...initialState, ...saved, settings:{...initialState.settings,...(saved.settings||{})} }
   } catch {
     return structuredClone(initialState)
   }
