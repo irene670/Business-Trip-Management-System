@@ -92,6 +92,7 @@ async function purgeExpiredCases(){
 
 app.get('/api/auth/status',async(_req,res)=>{const s=await readState();res.json({needsSetup:!(s.accounts||[]).some(x=>x.role==='accounting')})})
 app.get('/api/health',(_req,res)=>res.json({ok:true}))
+app.post('/api/auth/demo-login',(req,res)=>{const role=req.body?.role==='accounting'?'accounting':'employee';const user=role==='accounting'?{username:'demo-accounting',role,name:'測試會計／行政'}:{username:'demo-employee',role,name:'測試員工',employeeId:'DEMO-EMP',dept:'測試部',manager:'測試主管'};const token=crypto.randomUUID();sessions.set(token,user);res.setHeader('Set-Cookie',`trip_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800${process.env.RENDER?'; Secure':''}`);res.json(user)})
 app.post('/api/auth/setup',async(req,res)=>{let user,error;await updateState(async state=>{if((state.accounts||[]).some(x=>x.role==='accounting')){error='管理員已建立';return}const username=String(req.body.username||'accounting').trim(),password=String(req.body.password||'');if(password.length<8){error='密碼至少需要 8 個字元';return}state.accounts||=[];state.accounts.push({id:crypto.randomUUID(),username,role:'accounting',name:'會計／行政',passwordHash:await hashPassword(password)});user={username,role:'accounting',name:'會計／行政'}});if(error)return res.status(400).json({error});const token=crypto.randomUUID();sessions.set(token,user);res.setHeader('Set-Cookie',`trip_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800${process.env.RENDER?'; Secure':''}`);res.json(user)})
 app.post('/api/auth/login',async(req,res)=>{const state=await readState(),account=(state.accounts||[]).find(x=>x.username===String(req.body.username||'').trim());if(!account||!await checkPassword(String(req.body.password||''),account.passwordHash))return res.status(401).json({error:'帳號或密碼錯誤'});const user={username:account.username,role:account.role,name:account.name,employeeId:account.employeeId};const token=crypto.randomUUID();sessions.set(token,user);res.setHeader('Set-Cookie',`trip_session=${token}; HttpOnly; SameSite=Lax; Path=/; Max-Age=28800${process.env.RENDER?'; Secure':''}`);res.json(user)})
 app.get('/api/auth/me',requireAuth,(req,res)=>res.json(req.user))
@@ -112,7 +113,7 @@ app.post('/api/cases', async (req, res) => {
   const state=await readState(),profile=(state.settings.employees||[]).find(x=>x.employeeId===req.user.employeeId)
   const c = {
     id: uid(companyPrefix(body.company)),
-    company: body.company || '東瑭國際有限公司', employee:profile?.name||req.user.name||'', employeeId:profile?.employeeId||req.user.employeeId||'', dept:profile?.dept||'', manager:profile?.manager||'',ownerEmployeeId:profile?.employeeId||req.user.employeeId||'',
+    company: body.company || '東瑭國際有限公司', employee:profile?.name||req.user.name||'', employeeId:profile?.employeeId||req.user.employeeId||'', dept:profile?.dept||req.user.dept||'', manager:profile?.manager||req.user.manager||'',ownerEmployeeId:profile?.employeeId||req.user.employeeId||'',
     tripMode:'公出', taskType:'客戶拜訪', projectName:'', destination:'', startDate:'', endDate:'', purpose:'',taskStartAt:'',taskEndAt:'',foreignDailyUsd:0,usdRate:0,hr104TripConfirmed:false,hr104OvertimeConfirmed:false,
     claimItems:[], transports:[], lodgings:[], overtimeRows:[], hasPrivate:false, privateStart:'', privateEnd:'', privateNote:'',
     attachments:[], status:'草稿', createdAt:now(), updatedAt:now(), submittedAt:null, firstSubmittedAt:null,
@@ -131,7 +132,7 @@ app.put('/api/cases/:id', async (req, res) => {
     const editable=['company','tripMode','taskType','projectName','destination','startDate','endDate','purpose','taskStartAt','taskEndAt','foreignDailyUsd','usdRate','usdRateDate','usdRateSource','hr104TripConfirmed','hr104OvertimeConfirmed','claimItems','overtimeRows','hasPrivate','privateStart','privateEnd','privateNote']
     for(const key of editable)if(Object.hasOwn(req.body||{},key))c[key]=req.body[key]
     const profile=(state.settings.employees||[]).find(x=>x.employeeId===req.user.employeeId)
-    if(req.user.role==='employee')Object.assign(c,{employee:profile?.name||req.user.name||'',employeeId:req.user.employeeId,dept:profile?.dept||'',manager:profile?.manager||'',ownerEmployeeId:req.user.employeeId})
+    if(req.user.role==='employee')Object.assign(c,{employee:profile?.name||req.user.name||'',employeeId:req.user.employeeId,dept:profile?.dept||req.user.dept||'',manager:profile?.manager||req.user.manager||'',ownerEmployeeId:req.user.employeeId})
     c.updatedAt=now()
     out = c
   })

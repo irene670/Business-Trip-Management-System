@@ -27,7 +27,7 @@ export default function App(){
   const saveSettings=async next=>{const v=await api.settings(next);setSettings(v);showToast('公司規則已儲存')}
   const roleCases=role==='employee'?cases:cases.filter(c=>['待會計審核','會計退回','核銷完成'].includes(c.status))
   if(!authReady)return <div className="login-shell">載入中…</div>
-  if(!user)return <LoginScreen needsSetup={needsSetup} onDone={u=>{setUser(u);setNeedsSetup(false);setRole(u.role==='accounting'?'accounting':'employee')}}/>
+  if(!user)return <LoginScreen onDone={u=>{setUser(u);setNeedsSetup(false);setRole(u.role==='accounting'?'accounting':'employee')}}/>
   return <>
     <header className="topbar"><div className="brand"><div className="logo">TR</div><div><h1>集團差旅事後報支系統</h1><small>{user.name}｜{user.role==='accounting'?'會計／行政':'員工'}</small></div></div><div className="top-actions">{user.role==='accounting'&&<><button className="btn hide-mobile" onClick={seed}>載入示範</button><button className="btn hide-mobile" onClick={clear}>清除示範</button></>}{user.role==='employee'&&<button className="btn primary" onClick={create}>＋ 新增報支</button>}<button className="btn" onClick={async()=>{await api.logout();setUser(null);setCases([]);setSelected(null)}}>登出</button></div></header>
     <div className="main"><aside className="sidebar"><div className="role-title">登入身分</div><div className="nav"><button className="active">{role==='employee'?'員工報支':'會計行政'} <span className="count">{cases.length}</span></button></div><div className="side-note">所有差旅費用由出差人員填寫；勾選「個人代墊」才列入應付員工金額，未勾選視為公司掛帳。</div><div className="side-note test-note"><strong>測試版備註</strong><span>目前僅驗證報支流程；員工資料自動帶入、帳號與資料權限將於正式上線前另行確認。</span></div></aside>
@@ -39,10 +39,10 @@ export default function App(){
   </>
 }
 
-function LoginScreen({needsSetup,onDone}){
-  const [username,setUsername]=useState(needsSetup?'accounting':''),[password,setPassword]=useState(''),[error,setError]=useState(''),[busy,setBusy]=useState(false)
-  const submit=async e=>{e.preventDefault();setBusy(true);setError('');try{onDone(needsSetup?await api.setup({username,password}):await api.login({username,password}))}catch(err){setError(err.message)}finally{setBusy(false)}}
-  return <div className="login-shell"><form className="login-card" onSubmit={submit}><div className="logo">TR</div><h1>{needsSetup?'首次設定會計管理員':'差旅報支登入'}</h1><p>{needsSetup?'請建立第一組會計／行政帳號；密碼至少 8 個字元。':'員工請使用員工編號與會計設定的密碼登入。'}</p><div className="field"><label>{needsSetup?'管理員帳號':'帳號／員工編號'}</label><input autoFocus required value={username} onChange={e=>setUsername(e.target.value)}/></div><div className="field"><label>密碼</label><input required minLength="8" type="password" value={password} onChange={e=>setPassword(e.target.value)}/></div>{error&&<div className="callout danger">{error}</div>}<button className="btn primary" disabled={busy}>{busy?'登入中…':needsSetup?'建立並登入':'登入'}</button></form></div>
+function LoginScreen({onDone}){
+  const [error,setError]=useState(''),[busy,setBusy]=useState('')
+  const enter=async role=>{setBusy(role);setError('');try{onDone(await api.demoLogin(role))}catch(err){setError(err.message)}finally{setBusy('')}}
+  return <div className="login-shell"><section className="login-card" aria-labelledby="demo-login-title"><div className="logo">TR</div><h1 id="demo-login-title">差旅報支 Demo</h1><p>請選擇要體驗的角色；此版本不需帳號或密碼，僅供流程測試。</p><div className="demo-role-actions"><button className="btn primary" disabled={!!busy} onClick={()=>enter('employee')}>{busy==='employee'?'進入中…':'一般員工登入'}</button><button className="btn" disabled={!!busy} onClick={()=>enter('accounting')}>{busy==='accounting'?'進入中…':'會計登入'}</button></div>{error&&<div className="callout danger">{error}</div>}<small className="helper">測試版不代表正式權限或員工資料設定。</small></section></div>
 }
 
 function RulesModal({settings,onClose,onSave}){

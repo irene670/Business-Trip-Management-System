@@ -9,6 +9,7 @@ export const api = {
   me:()=>json('/api/auth/me'),
   setup:(body)=>json('/api/auth/setup',{method:'POST',body:JSON.stringify(body)}),
   login:(body)=>json('/api/auth/login',{method:'POST',body:JSON.stringify(body)}),
+  demoLogin:(role)=>json('/api/auth/demo-login',{method:'POST',body:JSON.stringify({role})}),
   logout:()=>json('/api/auth/logout',{method:'POST',body:'{}'}),
   state:()=>json('/api/state'),
   createCase:(body={})=>json('/api/cases',{method:'POST',body:JSON.stringify(body)}),
