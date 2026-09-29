@@ -7,6 +7,8 @@ import crypto from 'node:crypto'
 import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { ensureStore, readState, updateState, UPLOAD_DIR } from './store.js'
+import {reviewErrors} from '../src/lib/review.js'
+import {taskDaySegments} from '../src/lib/rules.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -46,7 +48,7 @@ function materialSnapshot(c) {
     company:c.company, employee:c.employee, employeeId:c.employeeId, dept:c.dept, manager:c.manager,
     tripMode:c.tripMode, taskType:c.taskType, projectName:c.projectName, destination:c.destination,
     startDate:c.startDate, endDate:c.endDate, purpose:c.purpose,
-    taskStartAt:c.taskStartAt, taskEndAt:c.taskEndAt,
+    taskStartAt:c.taskStartAt, taskEndAt:c.taskEndAt,taskDays:c.taskDays,
     claimItems:c.claimItems, transports:c.transports, lodgings:c.lodgings, overtimeRows:c.overtimeRows,
     hasPrivate:c.hasPrivate, privateStart:c.privateStart, privateEnd:c.privateEnd, privateNote:c.privateNote
   })
@@ -65,6 +67,8 @@ function validateEmployeeSubmission(c) {
     if (!String(c[k] ?? '').trim()) errors.push(`缺少欄位：${k}`)
   })
   const claimItems = Array.isArray(c.claimItems) ? c.claimItems : []
+  const taskDays=taskDaySegments(c)
+  if(!taskDays.length||taskDays.some(d=>d.to<=d.from))errors.push('每日任務結束時間必須晚於開始時間')
   if (!claimItems.length) errors.push('請至少新增 1 筆差旅費用')
   claimItems.forEach((item, index) => {
     if (!String(item.category || '').trim()) errors.push(`第 ${index + 1} 筆核銷項目未選擇類別`)
@@ -100,7 +104,7 @@ app.post('/api/auth/logout',requireAuth,(req,res)=>{sessions.delete(parseCookies
 app.get('/uploads/:filename',requireAuth,async(req,res)=>{const state=await readState();const allowed=state.cases.some(c=>(req.user.role==='accounting'||c.ownerEmployeeId===req.user.employeeId)&&(c.attachments||[]).some(a=>a.filename===req.params.filename));if(!allowed)return res.status(404).end();res.sendFile(path.join(UPLOAD_DIR,req.params.filename))})
 app.use('/api',requireAuth)
 
-app.get('/api/state', async (req, res) => {await purgeExpiredCases();const state=await readState();const cases=req.user.role==='accounting'?state.cases:state.cases.filter(c=>c.ownerEmployeeId===req.user.employeeId);const settings=req.user.role==='accounting'?state.settings:{...state.settings,employees:(state.settings.employees||[]).map(({monthlySalary,...p})=>p)};res.json({cases,settings,user:req.user})})
+app.get('/api/state', async (req, res) => {await purgeExpiredCases();const state=await readState();const cases=req.user.role==='accounting'?state.cases:state.cases.filter(c=>c.ownerEmployeeId===req.user.employeeId);const settings=req.user.role==='accounting'?state.settings:{...state.settings,employees:(state.settings.employees||[]).map(({monthlySalary,...p})=>p.employeeId===req.user.employeeId?{...p,monthlySalary}:p)};res.json({cases,settings,user:req.user})})
 
 app.get('/api/exchange-rate',async(req,res)=>{
   const date=String(req.query.date||'').slice(0,10)
@@ -129,7 +133,7 @@ app.put('/api/cases/:id', async (req, res) => {
     const c = findCase(state, req.params.id,req.user)
     if (!c) return
     if(req.user.role==='employee'&&!['草稿','主管退回','會計退回'].includes(c.status)){locked=true;return}
-    const editable=['company','tripMode','taskType','projectName','destination','startDate','endDate','purpose','taskStartAt','taskEndAt','foreignDailyUsd','usdRate','usdRateDate','usdRateSource','hr104TripConfirmed','hr104OvertimeConfirmed','claimItems','overtimeRows','hasPrivate','privateStart','privateEnd','privateNote']
+    const editable=['company','tripMode','taskType','projectName','destination','startDate','endDate','purpose','taskStartAt','taskEndAt','taskDays','foreignDailyUsd','usdRate','usdRateDate','usdRateSource','hr104TripConfirmed','hr104OvertimeConfirmed','claimItems','overtimeRows','hasPrivate','privateStart','privateEnd','privateNote']
     for(const key of editable)if(Object.hasOwn(req.body||{},key))c[key]=req.body[key]
     const profile=(state.settings.employees||[]).find(x=>x.employeeId===req.user.employeeId)
     if(req.user.role==='employee')Object.assign(c,{employee:profile?.name||req.user.name||'',employeeId:req.user.employeeId,dept:profile?.dept||req.user.dept||'',manager:profile?.manager||req.user.manager||'',ownerEmployeeId:req.user.employeeId})
@@ -196,21 +200,29 @@ app.post('/api/cases/:id/submit', async (req, res) => {
 
 app.post('/api/cases/:id/accounting', async (req, res) => {
   if(req.user.role!=='accounting')return res.status(403).json({error:'僅限會計／行政'})
-  const { action, note='', itemApprovals={}, costCenter='', costType='', customerRecharge='不適用', quotationCost='不適用', overtimePay=0, foreignDailyRate=0 } = req.body || {}
-  let out
+  const { action, note='', itemApprovals={}, allowanceAdjustments={},costCenter='', costType='', customerRecharge='不適用', quotationCost='不適用', overtimePay=0, foreignDailyRate=0 } = req.body || {}
+  if(!['save','approve','returnEmployee'].includes(action))return res.status(400).json({error:'不支援的核銷動作'})
+  let out,errors=[]
   await updateState(state => {
     const c=findCase(state,req.params.id,req.user); if(!c)return
+    out=c
+    if(c.status!=='待會計審核'){errors=['案件目前不可核定'];return}
+    const accounting={...(c.accounting||{}),note,itemApprovals,allowanceAdjustments,costCenter,costType,customerRecharge,quotationCost,overtimePay:Number(overtimePay||0),foreignDailyRate:Number(foreignDailyRate||0),reviewedAt:now()}
+    errors=reviewErrors({...c,accounting},state.settings)
+    if(errors.length)return
+    for(const a of Object.values(accounting.itemApprovals))if(a.status==='不核准')a.amount=0
     const from=c.status
-    c.accounting={...(c.accounting||{}),note,itemApprovals,costCenter,costType,customerRecharge,quotationCost,overtimePay:Number(overtimePay||0),foreignDailyRate:Number(foreignDailyRate||0)}
+    c.accounting=accounting
     if(action==='approve'){
       c.status='核銷完成'; c.accounting.at=now(); c.returnTarget=null
-    }else{
+    }else if(action==='returnEmployee'){
       c.status='會計退回'; c.returnTarget='employee'; c.returnSnapshot=materialSnapshot(c); c.accounting.returnedAt=now()
     }
-    c.audit ||= []; c.audit.push({at:now(),actor:'會計／行政',action:action==='approve'?'核銷完成':'退回員工補件',from,to:c.status,note})
+    c.audit ||= []; c.audit.push({at:now(),actor:'會計／行政',action:action==='approve'?'核銷完成':action==='save'?'儲存核定':'退回員工補件',from,to:c.status,note})
     c.updatedAt=now(); out=c
   })
   if(!out)return res.status(404).json({error:'案件不存在'})
+  if(errors.length)return res.status(400).json({error:errors.join('、'),details:errors})
   res.json(out)
 })
 

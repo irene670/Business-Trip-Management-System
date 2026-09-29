@@ -1,3 +1,6 @@
+import {CALENDAR_COVERAGE, dateKey, isOfficialNationalHoliday} from './calendar.js'
+
+export {CALENDAR_COVERAGE}
 export const COMPANIES=['東瑭國際有限公司','栢貨科技有限公司','豪世邁科技股份有限公司']
 export const TASKS=['客戶拜訪','設備維修／現場施工','展覽／活動','通路／業務開發','採購／取送貨','會議／教育訓練','行政／公部門','其他']
 export const TRANSPORTS=['高鐵／台鐵','飛機','客運／捷運','計程車','自用汽車','自用機車','公務車','其他']
@@ -42,36 +45,108 @@ export const claimItemsFor=c=>{
 }
 export const claimCategory=value=>CLAIM_CATEGORIES.find(x=>x.value===value)||CLAIM_CATEGORIES.at(-1)
 export const itemAmount=item=>item.category==='自用車／汽車'?Number(item.km||0)*6:item.category==='自用車／機車'?Number(item.km||0)*3:Number(item.amount||0)
-const dayKey=d=>d.toISOString().slice(0,10)
-const isHolidayDate=(d,settings)=>d.getDay()===0||d.getDay()===6||(settings.holidays||[]).includes(dayKey(d))
-export const lodgingLimit=(item,settings={})=>{
+const hasOverride=(values,key)=>(values||[]).includes(key)
+export const isNationalHoliday=(value,settings={})=>{
+  const key=dateKey(value)
+  if(hasOverride(settings.workdays,key))return false
+  return hasOverride(settings.holidays,key)||isOfficialNationalHoliday(key)
+}
+const isHolidayDate=(d,settings)=>d.getDay()===0||d.getDay()===6||isNationalHoliday(d,settings)
+export const lodgingNightlyLimits=(item,settings={})=>{
   const start=item.checkIn||item.date,end=item.checkOut
-  if(!start||!end)return 0
-  let d=new Date(start+'T12:00:00'),last=new Date(end+'T12:00:00'),limit=0
+  if(!start||!end)return []
+  let d=new Date(start+'T12:00:00'),last=new Date(end+'T12:00:00'),result=[]
   while(d<last){
-    const holiday=isHolidayDate(d,settings)
-    const base=item.region==='other'?(holiday?3500:2500):(holiday?4500:3500)
-    const approved=Number(item.approvedNightlyLimit||0)
-    limit+=item.specialApproved&&approved>0?Math.max(base,holiday?approved*1.2:approved):base
+    const national=isNationalHoliday(d,settings)
+    const weekend=d.getDay()===0||d.getDay()===6
+    const dayType=national?'nationalHoliday':weekend?'holiday':'weekday'
+    const metro=item.region!=='other'
+    const base=national?(metro?5400:4200):(weekend?(metro?4500:3500):(metro?3500:2500))
+    const limit=national?base:(item.specialApproved?base*1.2:base)
+    result.push({date:dateKey(d),dayType,limit:Math.round(limit)})
     d.setDate(d.getDate()+1)
   }
-  return Math.round(limit)
+  return result
 }
-export const taskHours=c=>{
-  if(!c.taskStartAt||!c.taskEndAt)return 0
-  const a=new Date(c.taskStartAt),b=new Date(c.taskEndAt)
-  return Math.max(0,Math.floor(((b-a)/3600000)*4)/4)
+export const lodgingLimit=(item,settings={})=>{
+  return lodgingNightlyLimits(item,settings).reduce((sum,night)=>sum+night.limit,0)
 }
+const atTime=(date,hour,minute=0)=>new Date(date.getFullYear(),date.getMonth(),date.getDate(),hour,minute,0,0)
+const timeText=date=>`${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`
+const withClock=(date,text,fallback)=>{
+  if(!/^\d{2}:\d{2}$/.test(text||''))return fallback
+  const [hour,minute]=text.split(':').map(Number)
+  return atTime(date,hour,minute)
+}
+export const taskDaySegments=(c,adjustments={})=>{
+  if(!c.taskStartAt||!c.taskEndAt)return []
+  const start=new Date(c.taskStartAt),end=new Date(c.taskEndAt)
+  if(Number.isNaN(start.getTime())||Number.isNaN(end.getTime())||end<=start)return []
+  const cursor=atTime(start,12),last=atTime(end,12),segments=[]
+  while(cursor<=last){
+    const key=dateKey(cursor),override=(c.taskDays||[]).find(day=>day.date===key)
+    const same=dateKey(cursor)===dateKey(start)&&dateKey(cursor)===dateKey(end)
+    let from=same?start:(dateKey(cursor)===dateKey(start)?start:atTime(cursor,8))
+    let to=same?end:(dateKey(cursor)===dateKey(end)?end:atTime(cursor,17))
+    from=withClock(cursor,override?.start,from)
+    to=withClock(cursor,override?.end,to)
+    {
+      const actualHours=Math.max(0,(to-from)/3600000)
+      const systemHours=Math.floor(actualHours*4)/4
+      const adjusted=Number(adjustments?.[key]?.taskHours)
+      segments.push({date:key,start:timeText(from),end:timeText(to),from,to,actualHours,systemHours,hours:Number.isFinite(adjusted)&&adjusted>=0?adjusted:systemHours})
+    }
+    cursor.setDate(cursor.getDate()+1)
+  }
+  return segments
+}
+export const taskHours=(c,adjustments={})=>Math.round(taskDaySegments(c,adjustments).reduce((sum,segment)=>sum+segment.hours,0)*100)/100
 export const foreignDailyUsd=(destination,settings={})=>Number((settings.foreignPerDiems||[]).find(x=>String(destination||'').includes(x.destination))?.dailyUsd||0)
-export const tripAllowance=(c,settings={})=>{
-  const hours=taskHours(c),employee=(settings.employees||[]).find(x=>x.name===c.employee)
-  const hourly=Number(employee?.monthlySalary||0)/30/8
-  if(!hourly||!hours)return {hours,amount:0,note:''}
-  const d=new Date(c.taskStartAt),day=d.getDay();let amount=0,note=''
-  if(day>=1&&day<=5){const payable=Math.max(0,hours-12);amount=hourly*payable*1.67;note='平日第 13 小時起'}
-  else if(day===6){const h=Math.min(hours,12);amount=hourly*(Math.min(h,2)*1.34+Math.min(Math.max(h-2,0),6)*1.67+Math.min(Math.max(h-8,0),4)*2.67);note='休息日分段計算'}
-  else {amount=hourly*(Math.min(Math.max(hours-8,0),2)*1.34+Math.min(Math.max(hours-10,0),2)*1.67);note='休假日 8 小時內另給一日薪資及一日補休'}
-  return {hours,amount:Math.round(amount),note}
+const employeeFor=(c,settings={})=>(settings.employees||[]).find(x=>(c.employeeId&&x.employeeId===c.employeeId)||x.name===c.employee)
+const employeeHourly=(c,settings={})=>Number(employeeFor(c,settings)?.monthlySalary||0)/30/8
+const holidayMultiplier=(date,settings)=>isHolidayDate(date,settings)?1.34:1
+export const lunchAllowance=(c,settings={},adjustments={})=>{
+  const hourly=employeeHourly(c,settings),days=taskDaySegments(c,adjustments).map(segment=>{
+    const d=new Date(segment.date+'T12:00:00')
+    const lunchStart=atTime(d,12,30),lunchEnd=atTime(d,13,30)
+    const systemMinutes=Math.max(0,Math.round((Math.min(segment.to,lunchEnd)-Math.max(segment.from,lunchStart))/60000))
+    const systemExtraMinutes=segment.actualHours>8?10:0
+    const minuteOverride=Number(adjustments?.[segment.date]?.minutes),extraOverride=Number(adjustments?.[segment.date]?.extraMinutes)
+    const minutes=Number.isFinite(minuteOverride)&&minuteOverride>=0?minuteOverride:systemMinutes
+    const extraMinutes=Number.isFinite(extraOverride)&&extraOverride>=0?extraOverride:systemExtraMinutes
+    const multiplier=holidayMultiplier(d,settings)
+    return {date:segment.date,hours:segment.hours,systemHours:segment.systemHours,systemMinutes,systemExtraMinutes,minutes,extraMinutes,multiplier,amount:Math.round(hourly*(minutes/60)*multiplier),extraAmount:Math.round(hourly*(extraMinutes/60)*multiplier)}
+  })
+  return {
+    days,
+    minutes:days.reduce((sum,day)=>sum+day.minutes,0),
+    extraMinutes:days.reduce((sum,day)=>sum+day.extraMinutes,0),
+    amount:days.reduce((sum,day)=>sum+day.amount,0),
+    extraAmount:days.reduce((sum,day)=>sum+day.extraAmount,0),
+    hourly
+  }
+}
+export const tripAllowance=(c,settings={},adjustments={})=>{
+  const segments=taskDaySegments(c,adjustments),hours=taskHours(c,adjustments),hourly=employeeHourly(c,settings)
+  if(!hourly||!hours)return {hours,systemHours:taskHours(c),amount:0,systemAmount:0,note:'',days:[]}
+  const calculateDay=(workHours,d)=>{
+    const day=d.getDay(),h=Math.min(workHours,12)
+    if(isNationalHoliday(d,settings)||day===0)return {amount:hourly*(Math.min(Math.max(h-8,0),2)*1.34+Math.min(Math.max(h-10,0),2)*1.67),note:'休假日分段計算'}
+    if(day===6)return {amount:hourly*(Math.min(h,2)*1.34+Math.min(Math.max(h-2,0),6)*1.67+Math.min(Math.max(h-8,0),4)*2.67),note:'休息日分段計算'}
+    return {amount:hourly*Math.max(0,workHours-12)*1.67,note:workHours>12?'平日第 13 小時起':''}
+  }
+  const days=segments.map(segment=>{
+    const d=new Date(segment.date+'T12:00:00'),system=calculateDay(segment.systemHours,d),adjusted=calculateDay(segment.hours,d)
+    return {date:segment.date,systemHours:segment.systemHours,hours:segment.hours,systemAmount:Math.round(system.amount),amount:Math.round(adjusted.amount),note:adjusted.note}
+  })
+  return {
+    hours,
+    systemHours:Math.round(segments.reduce((sum,segment)=>sum+segment.systemHours,0)*100)/100,
+    amount:days.reduce((sum,day)=>sum+day.amount,0),
+    systemAmount:days.reduce((sum,day)=>sum+day.systemAmount,0),
+    note:[...new Set(days.map(day=>day.note).filter(Boolean))].join('、'),
+    days
+  }
 }
 export const totals=(c,settings={mealBasis:'tripDays'})=>{
   const items=claimItemsFor(c)
@@ -83,11 +158,14 @@ export const totals=(c,settings={mealBasis:'tripDays'})=>{
   const meal=byGroup('meal')
   const other=byGroup('activity')+byGroup('other')
   const hasLodging=items.some(x=>x.category==='住宿費')
-  const mealAllowance=hasLodging?tripDays(c.startDate,c.endDate)*300:0
+  const mealAllowance=hasLodging&&c.tripMode!=='國外出差'?tripDays(c.startDate,c.endDate)*300:0
   const allowance=tripAllowance(c,settings).amount
+  const lunch=lunchAllowance(c,settings)
+  const lunchAllowanceAmount=lunch.amount
+  const extraAllowance=lunch.extraAmount
   const foreignPerDiem=c.tripMode==='國外出差'?Math.round(Number(c.foreignDailyUsd||0)*Number(c.usdRate||0)*tripDays(c.startDate,c.endDate)*0.3):0
   const employeePaid=transport+lodging+meal+other
-  return {transport,lodging,meal,other,mealAllowance,allowance,foreignPerDiem,total:employeePaid+mealAllowance+allowance+foreignPerDiem,itemCount:items.length,companyPaid:items.filter(x=>x.personalAdvance===false).reduce((s,x)=>s+itemAmount(x),0)}
+  return {transport,lodging,meal,other,mealAllowance,allowance,lunchAllowance:lunchAllowanceAmount,extraAllowance,foreignPerDiem,total:employeePaid+mealAllowance+allowance+lunchAllowanceAmount+extraAllowance+foreignPerDiem,itemCount:items.length,companyPaid:items.filter(x=>x.personalAdvance===false).reduce((s,x)=>s+itemAmount(x),0)}
 }
 export const overtimeHours=r=>{
   if(!r.start||!r.end)return 0
@@ -102,10 +180,11 @@ export const requiredReceipts=c=>{
   if(c.tripMode==='國外出差') req.push('換匯／匯率證明')
   return [...new Set(req)]
 }
+export const missingReceiptItems=c=>claimItemsFor(c).filter(item=>!(c.attachments||[]).some(a=>a.group==='receipt'&&a.mime?.startsWith('image/')&&(a.claimItemId===item.id||(!a.claimItemId&&a.category===claimCategory(item.category).receipt))))
 export const isWorkday=(date,settings)=>{
-  const key=date.toISOString().slice(0,10)
+  const key=dateKey(date)
   if((settings.workdays||[]).includes(key))return true
-  if((settings.holidays||[]).includes(key))return false
+  if(isNationalHoliday(date,settings))return false
   const d=date.getDay(); return d!==0&&d!==6
 }
 export const deadline=(endDate,settings)=>{
