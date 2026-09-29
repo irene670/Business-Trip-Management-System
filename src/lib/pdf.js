@@ -136,9 +136,11 @@ async function appendReceipt(out,a,index){
 }
 
 export async function generatePdf(c,settings={}){
+  const items=claimItemsFor(c)
+  if(!items.length)throw new Error('請先新增至少一筆核銷項目。')
   const missing=missingReceiptItems(c)
   if(missing.length){
-    const labels=missing.map(x=>typeof x==='string'?x:(x.label||x.category||x.name||'未命名項目'))
+    const labels=missing.map(x=>`第 ${items.findIndex(item=>item.id===x.id)+1} 筆 ${x.category} ${x.detail||''}`)
     throw new Error(`以下核銷項目尚未上傳票據照片：${labels.join('、')}`)
   }
   const bytes=await renderSummaryPdf(c,settings)

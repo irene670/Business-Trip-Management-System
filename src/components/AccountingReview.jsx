@@ -1,6 +1,6 @@
 import React,{useEffect,useState} from 'react'
 import AttachmentsSection from './AttachmentsSection.jsx'
-import {totals,money,lunchAllowance,missingReceiptItems} from '../lib/rules.js'
+import {totals,money,lunchAllowance,missingReceiptItems,claimItemsFor} from '../lib/rules.js'
 import {reviewRows,reviewErrors,approvedTotal} from '../lib/review.js'
 
 export default function AccountingReview({c,settings,onAction,onPdf}) {
@@ -29,7 +29,7 @@ export default function AccountingReview({c,settings,onAction,onPdf}) {
   return <div>
     <div className="detail-top"><div><div className="case-id">{c.id}</div><h2>會計／行政核銷</h2><span className="badge warn">{c.status}</span></div><button className="btn" disabled={busy||!!missing.length} onClick={()=>run('save',true)}>{busy?'處理中…':'下載／列印 PDF'}</button></div>
     {error&&<div className="callout danger" role="alert">{error}</div>}
-    {!!missing.length&&<div className="callout danger">尚有 {missing.length} 筆項目缺少票據照片，補齊後才能列印 PDF。</div>}
+    {!!missing.length&&<div className="callout danger">缺少票據照片：{missing.map(item=>`第 ${claimItemsFor(c).findIndex(x=>x.id===item.id)+1} 筆 ${item.category} ${item.detail||''}`).join('、')}。補齊後才能列印 PDF。</div>}
     <section className="section"><h3>票據照片</h3><AttachmentsSection c={c} readonly onUpload={()=>{}} onDelete={()=>{}}/></section>
     <section className="section"><h3>104 工時核對與津貼</h3><p className="helper">人工比對 104 紀錄後調整；保留原計算，調整必填原因。Demo 未串接 104。</p>
       {days.map(d=>{const a=review.allowanceAdjustments?.[d.date]||{};return <div className="calendar-panel mt10" key={d.date}><strong>{d.date}</strong><p className="helper">原系統：任務 {d.hours} 小時、午休 {d.minutes} 分鐘、額外 {d.extraMinutes} 分鐘；午休／額外倍率 {d.multiplier}。</p><div className="grid g3">

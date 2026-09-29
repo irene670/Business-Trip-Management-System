@@ -1,6 +1,6 @@
 import test from 'node:test'
 import assert from 'node:assert/strict'
-import {buildPdfHtml} from './pdf.js'
+import {buildPdfHtml,generatePdf} from './pdf.js'
 
 const settings={employees:[{employeeId:'E001',name:'測試員工',monthlySalary:57600}]}
 const baseCase={
@@ -11,6 +11,14 @@ const baseCase={
   attachments:[{id:'receipt-1',group:'receipt',claimItemId:'claim-1',category:'交通票券／訂票紀錄',name:'票據.jpg',mime:'image/jpeg',url:'/uploads/receipt.jpg'}],
   overtimeRows:[]
 }
+
+test('已送出案件也不能繞過 PDF 逐筆票據檢查',async()=>{
+  await assert.rejects(generatePdf({...baseCase,attachments:[]},settings),/第 1 筆 高鐵票/)
+})
+test('空白案件不可產生 PDF；初始 accounting 物件不代表已核定',async()=>{
+  await assert.rejects(generatePdf({...baseCase,claimItems:[]},settings),/至少一筆/)
+  assert.match(buildPdfHtml({...baseCase,accounting:{itemApprovals:{}}},settings),/尚未核定/)
+})
 
 test('PDF 顯示原申報、核定狀態、核定金額及核減原因',()=>{
   const c={...baseCase,accounting:{itemApprovals:{'claim:claim-1':{status:'部分核准',amount:1200,note:'票面金額不符'}}}}
