@@ -52,7 +52,7 @@ export const isNationalHoliday=(value,settings={})=>{
   return hasOverride(settings.holidays,key)||isOfficialNationalHoliday(key)
 }
 const isHolidayDate=(d,settings)=>d.getDay()===0||d.getDay()===6||isNationalHoliday(d,settings)
-export const lodgingNightlyLimits=(item,settings={})=>{
+export const lodgingNightlyLimits=(item,settings={},c={})=>{
   const start=item.checkIn||item.date,end=item.checkOut
   if(!start||!end)return []
   let d=new Date(start+'T12:00:00'),last=new Date(end+'T12:00:00'),result=[]
@@ -62,15 +62,17 @@ export const lodgingNightlyLimits=(item,settings={})=>{
     const dayType=national?'nationalHoliday':weekend?'holiday':'weekday'
     const metro=item.region!=='other'
     const base=national?(metro?5400:4200):(weekend?(metro?4500:3500):(metro?3500:2500))
-    const limit=national?base:(item.specialApproved?base*1.2:base)
+    const foreign=item.region==='foreign'||c.tripMode==='國外出差'
+    const limit=foreign?Number(c.foreignDailyUsd||0)*Number(c.usdRate||0)*(national||weekend?0.7:0.4):national?base:(item.specialApproved?base*1.2:base)
     result.push({date:dateKey(d),dayType,limit:Math.round(limit)})
     d.setDate(d.getDate()+1)
   }
   return result
 }
-export const lodgingLimit=(item,settings={})=>{
-  return lodgingNightlyLimits(item,settings).reduce((sum,night)=>sum+night.limit,0)
+export const lodgingLimit=(item,settings={},c={})=>{
+  return lodgingNightlyLimits(item,settings,c).reduce((sum,night)=>sum+night.limit,0)
 }
+export const cappedItemAmount=(item,settings={},c={})=>item.category!=='住宿費'?itemAmount(item):Math.min(itemAmount(item),(item.region==='foreign'||c.tripMode==='國外出差')?lodgingLimit(item,settings,c):(lodgingLimit(item,settings,c)||itemAmount(item)))
 const atTime=(date,hour,minute=0)=>new Date(date.getFullYear(),date.getMonth(),date.getDate(),hour,minute,0,0)
 const timeText=date=>`${String(date.getHours()).padStart(2,'0')}:${String(date.getMinutes()).padStart(2,'0')}`
 const withClock=(date,text,fallback)=>{
@@ -101,11 +103,13 @@ export const taskDaySegments=(c,adjustments={})=>{
   return segments
 }
 export const taskHours=(c,adjustments={})=>Math.round(taskDaySegments(c,adjustments).reduce((sum,segment)=>sum+segment.hours,0)*100)/100
-export const foreignDailyUsd=(destination,settings={})=>Number((settings.foreignPerDiems||[]).find(x=>String(destination||'').includes(x.destination))?.dailyUsd||0)
+export const foreignDailyUsd=(destination,settings={})=>Number((settings.foreignPerDiems||[]).find(x=>x.destination&&x.destination===destination)?.dailyUsd||0)
+export const overtimeReminderDays=c=>taskDaySegments(c).map(({date,hours})=>({date,hours,hr104Hours:Math.min(4,Math.max(0,hours-8)),extraHours:Math.max(0,hours-12)}))
 const employeeFor=(c,settings={})=>(settings.employees||[]).find(x=>(c.employeeId&&x.employeeId===c.employeeId)||x.name===c.employee)
 const employeeHourly=(c,settings={})=>Number(employeeFor(c,settings)?.monthlySalary||0)/30/8
 const holidayMultiplier=(date,settings)=>isHolidayDate(date,settings)?1.34:1
 export const lunchAllowance=(c,settings={},adjustments={})=>{
+  if(c.tripMode==='國外出差')return {days:[],minutes:0,extraMinutes:0,amount:0,extraAmount:0,hourly:employeeHourly(c,settings)}
   const hourly=employeeHourly(c,settings),days=taskDaySegments(c,adjustments).map(segment=>{
     const d=new Date(segment.date+'T12:00:00')
     const lunchStart=atTime(d,12,30),lunchEnd=atTime(d,13,30)
@@ -151,7 +155,7 @@ export const tripAllowance=(c,settings={},adjustments={})=>{
 export const totals=(c,settings={mealBasis:'tripDays'})=>{
   const items=claimItemsFor(c)
   const reimbursable=items.filter(x=>x.personalAdvance!==false)
-  const cappedAmount=x=>x.category==='住宿費'?Math.min(itemAmount(x),lodgingLimit(x,settings)||itemAmount(x)):itemAmount(x)
+  const cappedAmount=x=>cappedItemAmount(x,settings,c)
   const byGroup=group=>reimbursable.filter(x=>claimCategory(x.category).group===group).reduce((s,r)=>s+cappedAmount(r),0)
   const transport=byGroup('transport')+byGroup('vehicle')
   const lodging=byGroup('lodging')
@@ -161,8 +165,8 @@ export const totals=(c,settings={mealBasis:'tripDays'})=>{
   const mealAllowance=hasLodging&&c.tripMode!=='國外出差'?tripDays(c.startDate,c.endDate)*300:0
   const allowance=tripAllowance(c,settings).amount
   const lunch=lunchAllowance(c,settings)
-  const lunchAllowanceAmount=lunch.amount
-  const extraAllowance=lunch.extraAmount
+  const lunchAllowanceAmount=lunch.amount+lunch.extraAmount
+  const extraAllowance=0
   const foreignPerDiem=c.tripMode==='國外出差'?Math.round(Number(c.foreignDailyUsd||0)*Number(c.usdRate||0)*tripDays(c.startDate,c.endDate)*0.3):0
   const employeePaid=transport+lodging+meal+other
   return {transport,lodging,meal,other,mealAllowance,allowance,lunchAllowance:lunchAllowanceAmount,extraAllowance,foreignPerDiem,total:employeePaid+mealAllowance+allowance+lunchAllowanceAmount+extraAllowance+foreignPerDiem,itemCount:items.length,companyPaid:items.filter(x=>x.personalAdvance===false).reduce((s,x)=>s+itemAmount(x),0)}

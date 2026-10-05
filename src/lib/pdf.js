@@ -1,7 +1,7 @@
 import html2canvas from 'html2canvas'
 import { jsPDF } from 'jspdf'
 import { PDFDocument } from 'pdf-lib'
-import { claimItemsFor, totals, money, itemAmount, taskHours, missingReceiptItems } from './rules.js'
+import { claimItemsFor, totals, money, itemAmount, taskHours, missingReceiptItems, overtimeReminderDays } from './rules.js'
 import { reviewRows, approvedTotal } from './review.js'
 
 const esc=s=>String(s??'').replace(/[&<>"']/g,m=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[m]))
@@ -21,12 +21,12 @@ export function buildPdfHtml(c,settings={}){
     <h3>二、費用明細</h3><table><thead><tr><th>項目</th><th>日期／區間</th><th>內容</th><th>付款方式</th><th>原申報金額</th></tr></thead><tbody>
       ${claimItems.map(r=>`<tr><td>${esc(r.category)}</td><td>${esc(r.category==='住宿費'?`${r.checkIn||''}～${r.checkOut||''}`:r.date)}</td><td>${esc(r.detail)}${r.km?`<br>${esc(r.km)} 公里`:''}${r.note?`<br><small>${esc(r.note)}</small>`:''}</td><td>${r.personalAdvance!==false?'個人代墊':'公司掛帳'}</td><td>${money(itemAmount(r))}</td></tr>`).join('')||'<tr><td colspan="5">無費用</td></tr>'}
     </tbody></table>
-    <div class="pdf-total">膳雜費：${money(sum.mealAllowance)}　超時津貼：${money(sum.allowance)}<br>午休津貼：${money(sum.lunchAllowance)}　逾 8 小時加給 10 分鐘：${money(sum.extraAllowance)}<br>國外日支：${money(sum.foreignPerDiem)}　公司掛帳：${money(sum.companyPaid)}<br>員工原申報合計：${money(sum.total)}</div>
+    <div class="pdf-total">膳雜費：${money(sum.mealAllowance)}　超時津貼：${money(sum.allowance)}<br>午休津貼：${money(sum.lunchAllowance)}<br>國外日支：${money(sum.foreignPerDiem)}　公司掛帳：${money(sum.companyPaid)}<br>員工原申報合計：${money(sum.total)}</div>
     <h3>三、會計核定結果</h3><table><thead><tr><th>項目</th><th>員工原申報</th><th>核定狀態</th><th>核定金額</th><th>原因／備註</th></tr></thead><tbody>
       ${rows.map(r=>`<tr><td>${esc(r.label)}</td><td>${money(r.claim)}</td><td>${esc(reviewStatus(r,hasReview))}</td><td>${hasReview?money(r.amount):'—'}</td><td>${esc(r.note||'')}</td></tr>`).join('')||'<tr><td colspan="5">無核定項目</td></tr>'}
     </tbody></table>
     <div class="pdf-total">${hasReview?'會計核定應付員工合計':'會計尚未核定'}：${hasReview?money(finalTotal):'—'}</div>
-    <h3>四、加班明細</h3><table><thead><tr><th>日期</th><th>起訖</th><th>時數</th><th>工作內容</th></tr></thead><tbody>${(c.overtimeRows||[]).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.start)}～${esc(r.end)}</td><td>${esc(r.hours)}h</td><td>${esc(r.note)}</td></tr>`).join('')||'<tr><td colspan="4">無</td></tr>'}</tbody></table>
+    <h3>四、超時津貼</h3><p>本系統不代送 104 企業大師加班單，請另行提送。</p>${overtimeReminderDays(c).filter(d=>d.hr104Hours>0).map(d=>`<p>${esc(d.date)} 任務 ${d.hours} 小時：104 需送 ${d.hr104Hours} 小時加班單；另有 ${d.extraHours} 小時可申請超時津貼。</p>`).join('')}<table><thead><tr><th>日期</th><th>起訖</th><th>時數</th><th>工作內容</th></tr></thead><tbody>${(c.overtimeRows||[]).map(r=>`<tr><td>${esc(r.date)}</td><td>${esc(r.start)}～${esc(r.end)}</td><td>${esc(r.hours)}h</td><td>${esc(r.note)}</td></tr>`).join('')||'<tr><td colspan="4">無</td></tr>'}</tbody></table>
     <h3>五、紙本簽核</h3><table><tbody><tr><td style="height:72px">申請人親簽：<br><br>日期：</td><td>主管親簽：<br><br>日期：</td><td>會計／行政親簽：<br><br>日期：</td></tr></tbody></table>
     <h3>六、票據照片</h3><p>${receiptList.length} 張：${receiptList.map(a=>`${esc(a.category)}｜${esc(a.name)}`).join('、')||'無'}</p>
   </div>`
@@ -41,7 +41,10 @@ async function renderSummaryPdf(c,settings){
   document.body.appendChild(root)
   try{
     await nextFrame()
-    const source=await html2canvas(root.querySelector('.pdf-sheet'),{scale:1.6,backgroundColor:'#fff',useCORS:true})
+    const sheet=root.querySelector('.pdf-sheet')
+    const source=await html2canvas(sheet,{scale:1.6,backgroundColor:'#fff',useCORS:true})
+    const origin=sheet.getBoundingClientRect().top,ratio=source.width/sheet.offsetWidth
+    const blocks=[...sheet.querySelectorAll('tr,p,h3,.pdf-grid2>div')].map(node=>{const rect=node.getBoundingClientRect();return {top:Math.floor((rect.top-origin)*ratio),bottom:Math.ceil((rect.bottom-origin)*ratio)}})
     const pdf=new jsPDF({unit:'mm',format:'a4',orientation:'portrait'})
     const margin=8
     const pageW=210
@@ -52,7 +55,9 @@ async function renderSummaryPdf(c,settings){
     let offset=0
     let pageIndex=0
     while(offset<source.height){
-      const sliceH=Math.min(sourcePageH,source.height-offset)
+      let sliceH=Math.min(sourcePageH,source.height-offset)
+      const crossing=blocks.filter(b=>b.top>offset&&b.top<offset+sliceH&&b.bottom>offset+sliceH)
+      if(crossing.length)sliceH=Math.min(...crossing.map(b=>b.top))-offset
       const slice=document.createElement('canvas')
       slice.width=source.width
       slice.height=sliceH

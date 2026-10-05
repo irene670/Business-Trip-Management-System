@@ -8,7 +8,7 @@ import { promisify } from 'node:util'
 import { fileURLToPath } from 'node:url'
 import { ensureStore, readState, updateState, UPLOAD_DIR } from './store.js'
 import {reviewErrors} from '../src/lib/review.js'
-import {taskDaySegments} from '../src/lib/rules.js'
+import {taskDaySegments,foreignDailyUsd} from '../src/lib/rules.js'
 
 const __dirname = path.dirname(fileURLToPath(import.meta.url))
 const app = express()
@@ -135,6 +135,7 @@ app.put('/api/cases/:id', async (req, res) => {
     if(req.user.role==='employee'&&!['草稿','主管退回','會計退回'].includes(c.status)){locked=true;return}
     const editable=['company','tripMode','taskType','projectName','destination','startDate','endDate','purpose','taskStartAt','taskEndAt','taskDays','foreignDailyUsd','usdRate','usdRateDate','usdRateSource','hr104TripConfirmed','hr104OvertimeConfirmed','claimItems','overtimeRows','hasPrivate','privateStart','privateEnd','privateNote']
     for(const key of editable)if(Object.hasOwn(req.body||{},key))c[key]=req.body[key]
+    if(c.tripMode==='國外出差')c.foreignDailyUsd=foreignDailyUsd(c.destination,state.settings)
     const profile=(state.settings.employees||[]).find(x=>x.employeeId===req.user.employeeId)
     if(req.user.role==='employee')Object.assign(c,{employee:profile?.name||req.user.name||'',employeeId:req.user.employeeId,dept:profile?.dept||req.user.dept||'',manager:profile?.manager||req.user.manager||'',ownerEmployeeId:req.user.employeeId})
     c.updatedAt=now()
@@ -185,6 +186,7 @@ app.post('/api/cases/:id/submit', async (req, res) => {
   await updateState(state => {
     const c = findCase(state, req.params.id,req.user)
     if (!c) return
+    if(c.tripMode==='國外出差')c.foreignDailyUsd=foreignDailyUsd(c.destination,state.settings)
     errors = validateEmployeeSubmission(c)
     if (errors.length) { out=c; return }
     const oldStatus = c.status
@@ -200,14 +202,14 @@ app.post('/api/cases/:id/submit', async (req, res) => {
 
 app.post('/api/cases/:id/accounting', async (req, res) => {
   if(req.user.role!=='accounting')return res.status(403).json({error:'僅限會計／行政'})
-  const { action, note='', itemApprovals={}, allowanceAdjustments={},costCenter='', costType='', customerRecharge='不適用', quotationCost='不適用', overtimePay=0, foreignDailyRate=0 } = req.body || {}
+  const { action, note='', itemApprovals={}, allowanceAdjustments={},lunchCombined=false,costCenter='', costType='', customerRecharge='不適用', quotationCost='不適用', overtimePay=0, foreignDailyRate=0 } = req.body || {}
   if(!['save','approve','returnEmployee'].includes(action))return res.status(400).json({error:'不支援的核銷動作'})
   let out,errors=[]
   await updateState(state => {
     const c=findCase(state,req.params.id,req.user); if(!c)return
     out=c
     if(c.status!=='待會計審核'){errors=['案件目前不可核定'];return}
-    const accounting={...(c.accounting||{}),note,itemApprovals,allowanceAdjustments,costCenter,costType,customerRecharge,quotationCost,overtimePay:Number(overtimePay||0),foreignDailyRate:Number(foreignDailyRate||0),reviewedAt:now()}
+    const accounting={...(c.accounting||{}),note,itemApprovals,allowanceAdjustments,lunchCombined:!!lunchCombined,costCenter,costType,customerRecharge,quotationCost,overtimePay:Number(overtimePay||0),foreignDailyRate:Number(foreignDailyRate||0),reviewedAt:now()}
     errors=reviewErrors({...c,accounting},state.settings)
     if(errors.length)return
     for(const a of Object.values(accounting.itemApprovals))if(a.status==='不核准')a.amount=0

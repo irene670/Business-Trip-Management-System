@@ -15,9 +15,9 @@ test('不核准強制零元且必填原因，包括津貼',()=>{
 })
 test('104 核定調整不改變原申報數字',()=>{
   const c={...base,accounting:{allowanceAdjustments:{'2026-09-07':{minutes:30,extraMinutes:0,taskHours:8,note:'依104紀錄'}}}}
-  assert.equal(totals(c,settings).lunchAllowance,100)
+  assert.equal(totals(c,settings).lunchAllowance,117)
   const row=reviewRows(c,settings).find(r=>r.key==='lunch-allowance')
-  assert.equal(row.claim,100)
+  assert.equal(row.claim,117)
   assert.equal(row.amount,50)
   assert.match(row.note,/104/)
   assert.equal(approvedTotal(c,settings),150)
